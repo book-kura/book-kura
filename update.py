@@ -8,14 +8,12 @@ from urllib.parse import quote
 from google import genai
 from google.genai import types
 
-# 環境変数からAPIキーとアソシエイトIDを取得
 API_KEY = os.environ.get("GEMINI_API_KEY")
 TRACKING_ID = os.environ.get("AMAZON_TRACKING_ID", "skusagi8655-22")
 
 client = genai.Client(api_key=API_KEY)
 
 def get_openbd_cover(isbn):
-    """OpenBD（日本の出版書誌データベース）から公式書影URLを取得"""
     if not isbn:
         return None
     try:
@@ -32,7 +30,6 @@ def get_openbd_cover(isbn):
     return None
 
 def search_book_cover_api(query_str):
-    """Google Books APIとOpenBDを併用して書影URLを取得"""
     try:
         encoded = quote(query_str)
         gb_url = f"https://www.googleapis.com/books/v1/volumes?q={encoded}&maxResults=10"
@@ -41,7 +38,6 @@ def search_book_cover_api(query_str):
             gb_data = json.loads(res.read().decode('utf-8'))
             items = gb_data.get("items", [])
 
-            # 1. Google BooksにimageLinksがあれば優先使用
             for item in items:
                 vol = item.get("volumeInfo", {})
                 image_links = vol.get("imageLinks", {})
@@ -49,7 +45,6 @@ def search_book_cover_api(query_str):
                 if thumb:
                     return thumb.replace("http://", "https://").replace("&edge=curl", "")
 
-            # 2. Google Booksに画像がない場合、ISBNを使ってOpenBDから日本の公式書影を取得
             for item in items:
                 vol = item.get("volumeInfo", {})
                 for id_obj in vol.get("industryIdentifiers", []):
@@ -63,7 +58,6 @@ def search_book_cover_api(query_str):
     return None
 
 def fetch_book_cover(title, author=""):
-    """作品名・著者名から表紙画像URLを取得する"""
     clean_title = re.sub(r'[\(（【\[].*?[\)）】\]]', '', title)
     clean_title = re.sub(r'\s*\d+巻.*$', '', clean_title)
     clean_title = re.sub(r'\s*第?\d+巻.*$', '', clean_title)
@@ -88,8 +82,7 @@ def fetch_book_cover(title, author=""):
 
     return "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80"
 
-prompt = """
-あなたは日本最大級の大型書店の敏腕バイヤー兼書評家です。
+prompt = """あなたは日本最大級の大型書店の敏腕バイヤー兼書評家です。
 現在Kindleでセール・ポイント還元中、または話題となっている人気漫画・書籍の中から、
 読者評価と話題性が極めて高い作品を【35〜40作品】厳選し、以下のJSON形式で出力してください。
 
@@ -101,29 +94,4 @@ prompt = """
    - "free"：1〜3巻（またはそれ以上）無料、99円均一などの大幅割引キャンペーン作
    - "completed"：全巻完結済みの不朽の名作、アニメ化・実写化済みのイッキ読み推奨作
 4. ジャンルバランス：少年・青年・少女・女性コミックを中心に、人気のビジネス書・小説・教養書も1〜2割程度織り交ぜること。
-5. 見どころ（highlight）：書店の手書きPOPのように「なぜ今読むべきか」を35〜50文字程度で簡潔にまとめること。
-
-【出力JSONフォーマット】
-{
-  "items": [
-    {
-      "title": "作品名（巻数表記がある場合はそれも記載）",
-      "author": "著者名",
-      "category": "50pct" または "free" または "completed",
-      "badge": "50%還元" や "1-3巻無料" などの短いバッジ表記,
-      "badge_color": "bg-amber-600"（還元）または "bg-emerald-600"（無料）または "bg-indigo-600"（完結）,
-      "tags": "#青年コミック #アニメ化 など",
-      "sale_price": "実質 ○○円 または 無料 または ○○円",
-      "original_price": "定価表記（あれば。不明なら空文字）",
-      "search_query": "Amazon検索用キーワード（例: キングダム 1巻 Kindle）",
-      "highlight": "35〜50文字の書店POP風おすすめコメント"
-    }
-  ]
-}
-"""
-
-try:
-    response = client.models.generate_content(
-        model="gemini-3.8-flash",
-        contents=prompt,
-        config=types.GenerateContentConfig
+5. 見どころ
