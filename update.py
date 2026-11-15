@@ -45,21 +45,20 @@ prompt = """
     }
   ]
 }
-※マークダウン記法（```json など）や前置き・解説は一切含めず、純粋なJSON文字列のみを出力してください。
 """
 
 try:
     response = client.models.generate_content(
-        model="gemini-2.5-flash",
+        model="gemini-3.8-flash",
         contents=prompt,
         config=types.GenerateContentConfig(
-            max_output_tokens=8192,
+            response_mime_type="application/json",
+            max_output_tokens=16384,
             temperature=0.7,
         ),
     )
     
     text = response.text.strip()
-    # コードブロックが含まれていた場合のクリーンアップ
     text = re.sub(r"^```json\s*", "", text)
     text = re.sub(r"^```\s*", "", text)
     text = re.sub(r"\s*```$", "", text)
@@ -70,10 +69,10 @@ try:
     for item in data.get("items", []):
         query = item.get("search_query", item["title"])
         encoded_query = quote(query)
-        item["url"] = f"https://www.amazon.co.jp/s?k={encoded_query}&i=digital-text&tag={TRACKING_ID}"
+        item["url"] = f"[https://www.amazon.co.jp/s?k=](https://www.amazon.co.jp/s?k=){encoded_query}&i=digital-text&tag={TRACKING_ID}"
         if not item.get("image_url"):
             # デフォルトプレースホルダー書影
-            item["image_url"] = "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80"
+            item["image_url"] = "[https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80](https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80)"
 
     # 更新日時をJST（日本時間）で記録
     JST = timezone(timedelta(hours=+9), 'JST')
