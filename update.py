@@ -35,19 +35,42 @@ def make_cover_svg(title, author, category):
   )
   return "data:image/svg+xml;utf8," + quote(svg)
 
+jst = timezone(timedelta(hours=9))
+now = datetime.now(jst)
+weekdays = ["月", "火", "水", "木", "金", "土", "日"]
+today_date = f"{now.year}年{now.month}月{now.day}日({weekdays[now.weekday()]})"
+
 themes = [
   "社会派サスペンス・裏社会・頭脳戦の傑作を厚めに",
   "大人向けの静かなヒューマンドラマ・日常・グルメ名作を厚めに",
-  "マンガ大賞・このマンガがすごい！上位の通好み話題作を中心に",
-  "SF・歴史・知的好奇心をくすぐる骨太コミックを中心に",
-  "全5〜15巻程度で週末にイッキ読みできる隠れた完結名作を多めに"
+  "マンガ大賞・このマンガがすごい！・文化庁メディア芸術祭の通好み話題作を中心に",
+  "SF・歴史・知的好奇心をくすぐる骨太コミック・教養漫画を中心に",
+  "全5〜15巻程度でイッキ読みできる隠れた完結名作を多めに",
+  "90年代〜2010年代の今こそ読み返したい不朽の名作・青年誌の傑作を厚めに",
+  "お仕事漫画・プロフェッショナル・熱い人間ドラマを中心に"
 ]
 today_theme = random.choice(themes)
 
-with open("prompt.txt", "r", encoding="utf-8") as f:
-  prompt = f.read().replace("{today_theme}", today_theme)
+exclude_list = []
+if os.path.exists("data.json"):
+  try:
+    with open("data.json", "r", encoding="utf-8") as f:
+      old_data = json.load(f)
+      old_titles = [x.get("title", "") for x in old_data.get("items", []) if x.get("title")]
+      exclude_list = random.sample(old_titles, min(len(old_titles), 50))
+  except Exception:
+    pass
+exclude_titles = "、".join(exclude_list) if exclude_list else "なし"
 
-cfg = types.GenerateContentConfig(response_mime_type="application/json", max_output_tokens=32768, temperature=0.95)
+with open("prompt.txt", "r", encoding="utf-8") as f:
+  prompt = (
+    f.read()
+    .replace("{today_date}", today_date)
+    .replace("{today_theme}", today_theme)
+    .replace("{exclude_titles}", exclude_titles)
+  )
+
+cfg = types.GenerateContentConfig(response_mime_type="application/json", max_output_tokens=32768, temperature=1.0)
 res = client.models.generate_content(model="gemini-3.8-flash", contents=prompt, config=cfg)
 
 txt = res.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
@@ -56,13 +79,15 @@ items = data.get("items", [])
 if not items:
   raise ValueError("Empty")
 
+random.shuffle(items)
+
 for it in items:
   q = quote(it.get("search_query", it["title"]))
   it["url"] = "[https://www.amazon.co.jp/s?k=](https://www.amazon.co.jp/s?k=)" + q + "&i=digital-text&tag=" + TAG
   it["image_url"] = make_cover_svg(it["title"], it.get("author", ""), it.get("category", ""))
 
-data["updated_at"] = datetime.now(timezone(timedelta(hours=9))).strftime("%Y/%m/%d %H:%M")
+data["updated_at"] = now.strftime("%Y/%m/%d %H:%M")
 with open("data.json", "w", encoding="utf-8") as f:
   json.dump(data, f, ensure_ascii=False, indent=2)
 
-print("Done:", len(items), "Theme:", today_theme)
+print("Done:", len(items), "Date:", today_date, "Theme:", today_theme)
