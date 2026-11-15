@@ -10,7 +10,7 @@ from google.genai import types
 
 # 環境変数からAPIキーとアソシエイトIDを取得
 API_KEY = os.environ.get("GEMINI_API_KEY")
-TRACKING_ID = os.environ.get("AMAZON_TRACKING_ID", "book-kura-22")
+TRACKING_ID = os.environ.get("AMAZON_TRACKING_ID", "skusagi8655-22")
 
 client = genai.Client(api_key=API_KEY)
 
@@ -32,7 +32,7 @@ def get_openbd_cover(isbn):
     return None
 
 def search_book_cover_api(query_str):
-    """Google Books APIでISBNと書影URLの両方を探し、OpenBDも併用して書影を取得"""
+    """Google Books APIとOpenBDを併用して書影URLを取得"""
     try:
         encoded = quote(query_str)
         gb_url = f"https://www.googleapis.com/books/v1/volumes?q={encoded}&maxResults=10"
@@ -41,7 +41,7 @@ def search_book_cover_api(query_str):
             gb_data = json.loads(res.read().decode('utf-8'))
             items = gb_data.get("items", [])
 
-            # 1. まずGoogle Books自体にimageLinksがあるものを優先探索
+            # 1. Google BooksにimageLinksがあれば優先使用
             for item in items:
                 vol = item.get("volumeInfo", {})
                 image_links = vol.get("imageLinks", {})
@@ -49,7 +49,7 @@ def search_book_cover_api(query_str):
                 if thumb:
                     return thumb.replace("http://", "https://").replace("&edge=curl", "")
 
-            # 2. Google Booksに画像がない場合、取得できたISBNを使ってOpenBDから日本の公式書影を引く
+            # 2. Google Booksに画像がない場合、ISBNを使ってOpenBDから日本の公式書影を取得
             for item in items:
                 vol = item.get("volumeInfo", {})
                 for id_obj in vol.get("industryIdentifiers", []):
@@ -63,8 +63,7 @@ def search_book_cover_api(query_str):
     return None
 
 def fetch_book_cover(title, author=""):
-    """作品名・著者名から本物の表紙画像URLを取得する"""
-    # 括弧書き、巻数表記、Kindle表記を削除してベースの作品名を抽出
+    """作品名・著者名から表紙画像URLを取得する"""
     clean_title = re.sub(r'[\(（【\[].*?[\)）】\]]', '', title)
     clean_title = re.sub(r'\s*\d+巻.*$', '', clean_title)
     clean_title = re.sub(r'\s*第?\d+巻.*$', '', clean_title)
@@ -74,24 +73,20 @@ def fetch_book_cover(title, author=""):
 
     clean_author = re.sub(r'[\(（【\[].*?[\)）】\]]', '', author).split('/')[0].split('・')[0].strip()
 
-    # パターン1：作品名 ＋ 著者名（コミック指定なし・広め検索）
     if clean_author:
         cover = search_book_cover_api(f"{clean_title} {clean_author}")
         if cover:
-            return cover, True
+            return cover
 
-    # パターン2：作品名 ＋ コミック（単行本版ヒット狙い）
     cover = search_book_cover_api(f"{clean_title} コミック")
     if cover:
-        return cover, True
+        return cover
 
-    # パターン3：作品名のみ
     cover = search_book_cover_api(clean_title)
     if cover:
-        return cover, True
+        return cover
 
-    # 見つからない場合のみフォールバック
-    return "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80", False
+    return "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80"
 
 prompt = """
 あなたは日本最大級の大型書店の敏腕バイヤー兼書評家です。
@@ -131,44 +126,4 @@ try:
     response = client.models.generate_content(
         model="gemini-3.8-flash",
         contents=prompt,
-        config=types.GenerateContentConfig(
-            response_mime_type="application/json",
-            max_output_tokens=8192,
-            temperature=0.7,
-        ),
-    )
-    
-    text = response.text.strip()
-    text = re.sub(r"^```json\s*", "", text)
-    text = re.sub(r"^```\s*", "", text)
-    text = re.sub(r"\s*```$", "", text)
-
-    data = json.loads(text)
-    items = data.get("items", [])
-    hit_count = 0
-
-    # 各作品にAmazonアソシエイトURLと本物の表紙画像URLを付与
-    for item in items:
-        query = item.get("search_query", item["title"])
-        encoded_query = quote(query)
-        item["url"] = f"[https://www.amazon.co.jp/s?k=](https://www.amazon.co.jp/s?k=){encoded_query}&i=digital-text&tag={TRACKING_ID}"
-        
-        cover_url, is_hit = fetch_book_cover(item["title"], item.get("author", ""))
-        item["image_url"] = cover_url
-        if is_hit:
-            hit_count += 1
-        time.sleep(0.25)
-
-    # 更新日時をJST（日本時間）で記録
-    JST = timezone(timedelta(hours=+9), 'JST')
-    now = datetime.now(JST)
-    data["updated_at"] = now.strftime("%Y/%m/%d %H:%M")
-
-    with open("data.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-    print(f"data.json generated: {len(items)} items (Real covers found: {hit_count}/{len(items)})")
-
-except Exception as e:
-    print(f"Error occurred: {e}")
-    raise e
+        config=types.GenerateContentConfig
