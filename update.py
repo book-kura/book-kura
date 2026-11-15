@@ -1,52 +1,61 @@
 import os
 import json
 import re
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
+from urllib.parse import quote
 from google import genai
+from google.genai import types
 
 # 環境変数からAPIキーとアソシエイトIDを取得
 API_KEY = os.environ.get("GEMINI_API_KEY")
-TRACKING_ID = os.environ.get("AMAZON_TRACKING_ID", "manga-kura-22")
+TRACKING_ID = os.environ.get("AMAZON_TRACKING_ID", "book-kura-22")
 
 client = genai.Client(api_key=API_KEY)
 
 prompt = """
-あなたは書店の名物バイヤー・書評家です。
-現在Kindleでセール・ポイント還元中、または話題となっている漫画・書籍の中から、
-読者に自信を持っておすすめできる作品を厳選し、以下のJSON形式で出力してください。
+あなたは日本最大級の大型書店の敏腕バイヤー兼書評家です。
+現在Kindleでセール・ポイント還元中、または話題となっている人気漫画・書籍の中から、
+読者評価と話題性が極めて高い作品を【最低でも50作品（目安50〜60作品）】厳選し、以下のJSON形式で出力してください。
 
-【厳選条件】
-- カテゴリは以下の3種類からバランスよく計6〜9作品選定してください:
-  1. "50pct"（50%以上ポイント還元、実質半額など）
-  2. "free"（1〜3巻無料、または大幅割引キャンペーン中）
-  3. "completed"（全巻完結名作の一気読み、または珠玉の名短編集）
-- 見どころ（highlight）は、あらすじだけでなく「なぜ大人が今読むべきか」「何が心を揺さぶるのか」を熱量のある書店POP風に50〜80文字程度で簡潔に記述してください。
+【絶対遵守の厳選・並び順ルール】
+1. 出力件数：必ず「50作品以上（50〜60作品）」を出力すること。途中で省略しないこと。
+2. ソート順（重要）：Amazonの読者レビュー評価（星4.3以上・レビュー数多数）および世間的な人気・話題性が高い順に、上から降順（人気・高評価が上）で並べること。
+3. カテゴリ配分：以下の3種類にバランスよく振り分けること（各カテゴリ15〜20作品程度）。
+   - "50pct"：50%以上ポイント還元、実質半額、まとめ買い高還元対象作
+   - "free"：1〜3巻（またはそれ以上）無料、99円均一などの大幅割引キャンペーン作
+   - "completed"：全巻完結済みの不朽の名作、アニメ化・実写化済みのイッキ読み推奨作
+4. ジャンルバランス：少年・青年・少女・女性コミックを中心に、人気のビジネス書・小説・教養書も1〜2割程度織り交ぜて飽きさせない構成にすること。
+5. 見どころ（highlight）：書店の手書きPOPのように「なぜ今読むべきか」「読者の心を掴む魅力」を40〜60文字程度で熱量高く簡潔にまとめること。
 
 【出力JSONフォーマット】
 {
   "items": [
     {
-      "title": "作品名（巻数指定がある場合はそれも）",
+      "title": "作品名（巻数表記がある場合はそれも記載）",
       "author": "著者名",
       "category": "50pct" または "free" または "completed",
       "badge": "50%還元" や "1-3巻無料" などの短いバッジ表記,
       "badge_color": "bg-amber-600"（還元）または "bg-emerald-600"（無料）または "bg-indigo-600"（完結）,
-      "tags": "#少年コミック #完結 など",
+      "tags": "#青年コミック #アニメ化 など",
       "sale_price": "実質 ○○円 または 無料 または ○○円",
-      "original_price": "定価表記（あれば）",
-      "search_query": "Amazon検索用キーワード（例: ダンジョン飯 1巻 Kindle）",
-      "image_url": "書影画像のURL（不明な場合は空文字）",
-      "highlight": "書店POP風の見どころ解説文"
+      "original_price": "定価表記（あれば。不明なら空文字）",
+      "search_query": "Amazon検索用キーワード（例: キングダム 1巻 Kindle）",
+      "image_url": "",
+      "highlight": "40〜60文字の書店POP風おすすめコメント"
     }
   ]
 }
-※マークダウン記法（```json など）は含めず、純粋なJSON文字列のみを出力してください。
+※マークダウン記法（```json など）や前置き・解説は一切含めず、純粋なJSON文字列のみを出力してください。
 """
 
 try:
     response = client.models.generate_content(
         model="gemini-2.5-flash",
         contents=prompt,
+        config=types.GenerateContentConfig(
+            max_output_tokens=8192,
+            temperature=0.7,
+        ),
     )
     
     text = response.text.strip()
@@ -60,20 +69,21 @@ try:
     # AmazonアソシエイトURLの生成付与
     for item in data.get("items", []):
         query = item.get("search_query", item["title"])
-        encoded_query = requests_quote = __import__('urllib.parse').parse.quote(query)
+        encoded_query = quote(query)
         item["url"] = f"https://www.amazon.co.jp/s?k={encoded_query}&i=digital-text&tag={TRACKING_ID}"
         if not item.get("image_url"):
             # デフォルトプレースホルダー書影
             item["image_url"] = "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80"
 
-    # 更新日時をJSTで記録
-    now = datetime.now()
+    # 更新日時をJST（日本時間）で記録
+    JST = timezone(timedelta(hours=+9), 'JST')
+    now = datetime.now(JST)
     data["updated_at"] = now.strftime("%Y/%m/%d %H:%M")
 
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    print("data.json successfully generated!")
+    print(f"data.json successfully generated with {len(data.get('items', []))} items!")
 
 except Exception as e:
     print(f"Error occurred: {e}")
