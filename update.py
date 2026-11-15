@@ -14,48 +14,84 @@ TRACKING_ID = os.environ.get("AMAZON_TRACKING_ID", "book-kura-22")
 
 client = genai.Client(api_key=API_KEY)
 
-def search_google_books(query_str):
-    """Google Books APIで検索し、確実に書影URLが存在する最初の1件を返す"""
+def get_openbd_cover(isbn):
+    """OpenBD（日本の出版書誌データベース）から公式書影URLを取得"""
+    if not isbn:
+        return None
+    try:
+        url = f"https://api.openbd.jp/v1/get?isbn={isbn}"
+        req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+        with urllib.request.urlopen(req, timeout=5) as res:
+            data = json.loads(res.read().decode('utf-8'))
+            if data and data[0]:
+                cover = data[0].get("summary", {}).get("cover")
+                if cover:
+                    return cover
+    except Exception:
+        pass
+    return None
+
+def search_book_cover_api(query_str):
+    """Google Books APIでISBNと書影URLの両方を探し、OpenBDも併用して書影を取得"""
     try:
         encoded = quote(query_str)
-        gb_url = f"https://www.googleapis.com/books/v1/volumes?q={encoded}&langRestrict=ja&maxResults=10"
+        gb_url = f"https://www.googleapis.com/books/v1/volumes?q={encoded}&maxResults=10"
         req = urllib.request.Request(gb_url, headers={'User-Agent': 'Mozilla/5.0'})
         with urllib.request.urlopen(req, timeout=6) as res:
             gb_data = json.loads(res.read().decode('utf-8'))
-            for item in gb_data.get("items", []):
-                image_links = item.get("volumeInfo", {}).get("imageLinks", {})
+            items = gb_data.get("items", [])
+
+            # 1. まずGoogle Books自体にimageLinksがあるものを優先探索
+            for item in items:
+                vol = item.get("volumeInfo", {})
+                image_links = vol.get("imageLinks", {})
                 thumb = image_links.get("thumbnail") or image_links.get("smallThumbnail")
                 if thumb:
-                    thumb = thumb.replace("http://", "https://").replace("&edge=curl", "")
-                    return thumb
+                    return thumb.replace("http://", "https://").replace("&edge=curl", "")
+
+            # 2. Google Booksに画像がない場合、取得できたISBNを使ってOpenBDから日本の公式書影を引く
+            for item in items:
+                vol = item.get("volumeInfo", {})
+                for id_obj in vol.get("industryIdentifiers", []):
+                    if id_obj.get("type") in ("ISBN_13", "ISBN_10"):
+                        isbn = id_obj.get("identifier")
+                        openbd_cover = get_openbd_cover(isbn)
+                        if openbd_cover:
+                            return openbd_cover
     except Exception:
         pass
     return None
 
 def fetch_book_cover(title, author=""):
-    """作品名と著者名から本物の表紙画像URLを高精度に取得する"""
-    # ノイズ除去（括弧書き、巻数表記、Kindle表記を削除）
+    """作品名・著者名から本物の表紙画像URLを取得する"""
+    # 括弧書き、巻数表記、Kindle表記を削除してベースの作品名を抽出
     clean_title = re.sub(r'[\(（【\[].*?[\)）】\]]', '', title)
     clean_title = re.sub(r'\s*\d+巻.*$', '', clean_title)
+    clean_title = re.sub(r'\s*第?\d+巻.*$', '', clean_title)
     clean_title = re.sub(r'\s*\d+$', '', clean_title).strip()
     if not clean_title:
         clean_title = title
 
     clean_author = re.sub(r'[\(（【\[].*?[\)）】\]]', '', author).split('/')[0].split('・')[0].strip()
 
-    # パターン1：作品名 ＋ 著者名 で検索（最も精度が高い）
+    # パターン1：作品名 ＋ 著者名（コミック指定なし・広め検索）
     if clean_author:
-        cover = search_google_books(f"{clean_title} {clean_author}")
+        cover = search_book_cover_api(f"{clean_title} {clean_author}")
         if cover:
-            return cover
+            return cover, True
 
-    # パターン2：作品名のみで検索
-    cover = search_google_books(clean_title)
+    # パターン2：作品名 ＋ コミック（単行本版ヒット狙い）
+    cover = search_book_cover_api(f"{clean_title} コミック")
     if cover:
-        return cover
+        return cover, True
 
-    # どうしても見つからない場合のみフォールバック画像
-    return "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80"
+    # パターン3：作品名のみ
+    cover = search_book_cover_api(clean_title)
+    if cover:
+        return cover, True
+
+    # 見つからない場合のみフォールバック
+    return "https://images.unsplash.com/photo-1544716278-ca5e3f4abd8c?w=300&q=80", False
 
 prompt = """
 あなたは日本最大級の大型書店の敏腕バイヤー兼書評家です。
@@ -108,16 +144,20 @@ try:
     text = re.sub(r"\s*```$", "", text)
 
     data = json.loads(text)
+    items = data.get("items", [])
+    hit_count = 0
 
     # 各作品にAmazonアソシエイトURLと本物の表紙画像URLを付与
-    for item in data.get("items", []):
+    for item in items:
         query = item.get("search_query", item["title"])
         encoded_query = quote(query)
         item["url"] = f"[https://www.amazon.co.jp/s?k=](https://www.amazon.co.jp/s?k=){encoded_query}&i=digital-text&tag={TRACKING_ID}"
         
-        # 表紙画像を自動検索してセット
-        item["image_url"] = fetch_book_cover(item["title"], item.get("author", ""))
-        time.sleep(0.2)
+        cover_url, is_hit = fetch_book_cover(item["title"], item.get("author", ""))
+        item["image_url"] = cover_url
+        if is_hit:
+            hit_count += 1
+        time.sleep(0.25)
 
     # 更新日時をJST（日本時間）で記録
     JST = timezone(timedelta(hours=+9), 'JST')
@@ -127,7 +167,7 @@ try:
     with open("data.json", "w", encoding="utf-8") as f:
         json.dump(data, f, ensure_ascii=False, indent=2)
 
-    print(f"data.json successfully generated with {len(data.get('items', []))} items!")
+    print(f"data.json generated: {len(items)} items (Real covers found: {hit_count}/{len(items)})")
 
 except Exception as e:
     print(f"Error occurred: {e}")
