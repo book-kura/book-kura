@@ -47,7 +47,7 @@ today_theme = random.choice(themes)
 with open("prompt.txt", "r", encoding="utf-8") as f:
   prompt = f.read().replace("{today_theme}", today_theme)
 
-cfg = types.GenerateContentConfig(response_mime_type="application/json", max_output_tokens=8192, temperature=0.95)
+cfg = types.GenerateContentConfig(response_mime_type="application/json", max_output_tokens=32768, temperature=0.95)
 res = client.models.generate_content(model="gemini-3.8-flash", contents=prompt, config=cfg)
 
 txt = res.text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
